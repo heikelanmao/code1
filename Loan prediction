@@ -1,0 +1,140 @@
+import pandas as pd
+import numpy as np
+data=pd.read_csv(r'C:\Users\Administrator\Desktop\LoanStats3a.csv',skiprows=1)
+
+
+#打开excel 发现很多列是空的 所以把缺失值去掉,url,desc是网址和数据描skiprows述去掉
+limit=len(data)*0.3
+data=data.dropna(thresh=limit,axis=1)#缺失值超过3成去除
+data=data.drop(['url','desc'],axis=1)
+print(data.iloc[0])#打印所有特征
+print(data.shape[1])#共有多少列
+
+
+#从网站下载的文件(DATA DICTIONARY)中有关于特征的描述，根据其描述删除无关及重复信息
+data= data.drop(["id", "member_id", "funded_amnt", "funded_amnt_inv", "grade", "sub_grade", "emp_title", "issue_d"], axis=1)
+data= data.drop(["zip_code", "out_prncp", "out_prncp_inv", "total_pymnt", "total_pymnt_inv", "total_rec_prncp"], axis=1)
+data = data.drop(["total_rec_int", "total_rec_late_fee", "recoveries", "collection_recovery_fee", "last_pymnt_d", "last_pymnt_amnt"], axis=1)
+print(data.iloc[0])
+print(data.shape[1])
+
+
+#寻找适合的label类标记，通过DATA DICTIONARY文件
+#发现'loan_status'特征的描述为Current status of the loan适合为label
+data['loan_status'].value_counts()#分组计数
+#把Fully Paid当成1，Charged Off当成0,其余类别太少删除
+data = data[(data['loan_status'] == "Fully Paid") | (data['loan_status'] == "Charged Off")]
+label_replace = {"loan_status" : {"Fully Paid": 1,"Charged Off": 0}}
+data = data.replace(label_replace)
+print (data.shape[1])
+
+
+#数据中除去NAN是否唯同一值，同一值删除因为对分析无用
+new_columns = data.columns
+drop_columns = []
+for col in new_columns:
+    col_series = data[col].dropna().unique()
+    if len(col_series) == 1:
+        drop_columns.append(col)
+data = data.drop(drop_columns, axis=1)
+print(drop_columns)
+print (data.shape)
+
+
+#看是否有null值
+null_counts = data.isnull().sum()
+null_counts
+
+
+#pub_rec_bankruptcies缺失值多达700，删除该特征
+#其他列缺失值小，可以删除缺失的行
+data = data.drop("pub_rec_bankruptcies", axis=1)
+data = data.dropna(axis=0)
+data.dtypes.value_counts()
+
+
+#查看哪些特征是obkect格式的
+object_columns = data.select_dtypes(include=["object"])
+print(object_columns.iloc[0])
+
+
+#对所有的object进行分组计数观察
+cols = ['term','int_rate','emp_length','home_ownership','verification_status','pymnt_plan', 'purpose', 'title', 'addr_state','earliest_cr_line','revol_util','last_credit_pull_d']
+for c in cols:
+    print(data[c].value_counts())
+    
+    
+#pymnt_plan，earliest_cr_line，last_credit_pull_d,addr_state,title无用删除
+#int_rate，revol_util  去掉%该格式就可以
+#其他用get_dummies把原列都拆分当成新列
+data = data.drop(['pymnt_plan','earliest_cr_line','last_credit_pull_d','addr_state','title'], axis=1)
+data["int_rate"] = data["int_rate"].str.rstrip("%").astype("float")
+data["revol_util"] = data["revol_util"].str.rstrip("%").astype("float")
+cat_columns = ["home_ownership", "verification_status", "emp_length", "purpose", "term"]
+dummy_df = pd.get_dummies(data[cat_columns])
+data = pd.concat([data, dummy_df], axis=1)
+data = data.drop(cat_columns, axis=1)
+
+data.info()#查看最终数据
+
+#用sklearn中的lr进行预测
+from sklearn.linear_model import LogisticRegression
+from sklearn.cross_validation import cross_val_predict, KFold
+cols = data.columns
+train_cols = cols.drop("loan_status")
+features = data[train_cols]
+target = data["loan_status"]
+lr = LogisticRegression(class_weight='balanced')#由于label样本不平均，加权值
+kf = KFold(features.shape[0], random_state=1)
+predictions = cross_val_predict(lr, features, target, cv=kf)
+predictions = pd.Series(predictions)
+lr.fit(features, target)
+predictions = lr.predict(features)
+
+fp_filter = (predictions == 1) & (data["loan_status"] == 0)# False positives.
+fp = len(predictions[fp_filter])
+
+
+tp_filter = (predictions == 1) & (data["loan_status"] == 1)# True positives.
+tp = len(predictions[tp_filter])
+
+fn_filter = (predictions == 0) & (data["loan_status"] == 1)# False negatives.
+fn = len(predictions[fn_filter])
+
+tn_filter = (predictions == 0) & (data["loan_status"] == 0)# True negatives
+tn = len(predictions[tn_filter])
+
+# tpr识别出的正实例占所有正实例的比例 fpr错认为正类的负实例占所有负实例的比例
+tpr = tp / float((tp + fn))
+fpr = fp / float((fp + tn))
+
+print(tpr)
+print(fpr)
+predictions[:20]
+
+
+#试用RF
+from sklearn.ensemble import RandomForestClassifier
+rf=RandomForestClassifier(n_estimators=10,class_weight="balanced", random_state=1)
+rf.fit(features, target)
+predictions = rf.predict(features)
+
+fp_filter = (predictions == 1) & (data["loan_status"] == 0)# False positives.
+fp = len(predictions[fp_filter])
+
+tp_filter = (predictions == 1) & (data["loan_status"] == 1)# True positives.
+tp = len(predictions[tp_filter])
+
+fn_filter = (predictions == 0) & (data["loan_status"] == 1)# False negatives.
+fn = len(predictions[fn_filter])
+
+tn_filter = (predictions == 0) & (data["loan_status"] == 0)# True negatives
+tn = len(predictions[tn_filter])
+
+# tpr识别出的正实例占所有正实例的比例 fpr错认为正类的负实例占所有负实例的比例
+tpr = tp / float((tp + fn))
+fpr = fp / float((fp + tn))
+
+print(tpr)
+print(fpr)
+predictions[:20]
